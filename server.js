@@ -1,6 +1,21 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+require('dotenv').config();
+
+let supabase = null;
+try {
+  const { createClient } = require('@supabase/supabase-js');
+  const SUPABASE_URL = process.env.SUPABASE_URL || '';
+  const SUPABASE_KEY = process.env.SUPABASE_KEY || '';
+  if (SUPABASE_URL && SUPABASE_KEY) {
+    supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+    console.log('Supabase client configured');
+  }
+} catch (err) {
+  // supabase package not installed or not configured — we'll fallback to local store
+  console.log('Supabase not configured or not installed, using local JSON store');
+}
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -120,6 +135,34 @@ app.post('/api/contact', (req, res) => {
     submittedAt: new Date().toISOString(),
   };
 
+  // If Supabase is configured, insert into the `contacts` table there
+  if (supabase) {
+    (async () => {
+      try {
+        const { data, error } = await supabase.from('contacts').insert([
+          { name: contactEntry.name, email: contactEntry.email, message: contactEntry.message, submitted_at: contactEntry.submittedAt }
+        ]);
+        if (error) {
+          console.error('Supabase insert error:', error);
+          // fallback to local file store
+          const contacts = readContacts();
+          contacts.push(contactEntry);
+          saveContacts(contacts);
+          return res.status(201).json({ success: true, contact: contactEntry, warning: 'Saved locally after Supabase error' });
+        }
+        return res.status(201).json({ success: true, contact: contactEntry, supabase: data });
+      } catch (err) {
+        console.error('Supabase exception:', err);
+        const contacts = readContacts();
+        contacts.push(contactEntry);
+        saveContacts(contacts);
+        return res.status(201).json({ success: true, contact: contactEntry, warning: 'Saved locally after Supabase exception' });
+      }
+    })();
+    return;
+  }
+
+  // Default local file storage
   const contacts = readContacts();
   contacts.push(contactEntry);
   saveContacts(contacts);
